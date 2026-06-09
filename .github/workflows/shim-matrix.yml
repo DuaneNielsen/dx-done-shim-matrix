@@ -113,13 +113,16 @@ jobs:
 
   # ── fetch-on-first-run: the #90 gate. NO binary present; the shim fetches the
   #    REAL dx-done binary from DuaneNielsen/dx-done-dist, verifies SHA-256, caches,
-  #    execs. Then proves the checksum-mismatch path hard-fails. Runs on all 3 OSes
-  #    through bash (Git Bash on Windows — Claude Code's real invocation path).
+  #    execs. Then proves the checksum-mismatch path hard-fails. Runs on Linux,
+  #    macOS arm64 (macos-latest) AND macOS Intel x86_64 (macos-13 — the dx-done-macos-x64
+  #    asset, wild-west #187), and Windows, through bash (Git Bash on Windows —
+  #    Claude Code's real invocation path). The shim's Darwin branch dispatches on
+  #    uname -m so each macOS runner fetches its matching arch asset.
   fetch:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]   # macos-13 = Intel (x86_64)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -130,11 +133,16 @@ jobs:
           set -uo pipefail
           case "$(uname -s)" in
             Linux)                asset=dx-done-linux-x64 ;;
-            Darwin)               asset=dx-done-macos-arm64 ;;
+            Darwin)
+              case "$(uname -m)" in
+                arm64)  asset=dx-done-macos-arm64 ;;
+                x86_64) asset=dx-done-macos-x64 ;;
+                *) echo "unsupported Darwin arch $(uname -m)"; exit 1 ;;
+              esac ;;
             MINGW*|MSYS*|CYGWIN*) asset=dx-done-windows-x64.exe ;;
             *) echo "unsupported $(uname -s)"; exit 1 ;;
           esac
-          echo "uname -s => $(uname -s); asset => $asset"
+          echo "uname -s => $(uname -s); uname -m => $(uname -m); asset => $asset"
           root="$PWD/fetch-clean"; mkdir -p "$root/bin"
           cp bin/dx-done "$root/bin/dx-done"
           cp bin/dx-done.release.json "$root/bin/dx-done.release.json"
@@ -160,7 +168,11 @@ jobs:
           set -uo pipefail
           case "$(uname -s)" in
             Linux)                asset=dx-done-linux-x64 ;;
-            Darwin)               asset=dx-done-macos-arm64 ;;
+            Darwin)
+              case "$(uname -m)" in
+                arm64)  asset=dx-done-macos-arm64 ;;
+                x86_64) asset=dx-done-macos-x64 ;;
+              esac ;;
             MINGW*|MSYS*|CYGWIN*) asset=dx-done-windows-x64.exe ;;
           esac
           root="$PWD/fetch-tamper"; mkdir -p "$root/bin"

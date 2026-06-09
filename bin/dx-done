@@ -5,7 +5,15 @@ PLUGIN_BIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pw
 
 case "$(uname -s)" in
   Linux)                asset="dx-done-linux-x64" ;;
-  Darwin)               asset="dx-done-macos-arm64" ;;
+  Darwin)
+    # Arch-aware: Intel Macs (x86_64) must get the x64 binary, not arm64 —
+    # otherwise the kernel rejects it with "Bad CPU type in executable".
+    case "$(uname -m)" in
+      arm64)  asset="dx-done-macos-arm64" ;;
+      x86_64) asset="dx-done-macos-x64" ;;
+      *) echo "dx-done plugin: unsupported macOS arch '$(uname -m)'" >&2; exit 1 ;;
+    esac
+    ;;
   MINGW*|MSYS*|CYGWIN*) asset="dx-done-windows-x64.exe" ;;
   *) echo "dx-done plugin: unsupported OS '$(uname -s)'" >&2; exit 1 ;;
 esac
