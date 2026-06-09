@@ -4,16 +4,84 @@ set -euo pipefail
 PLUGIN_BIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/bin"
 
 case "$(uname -s)" in
-  Linux)                bin="$PLUGIN_BIN/dx-done-linux-x64" ;;
-  Darwin)               bin="$PLUGIN_BIN/dx-done-macos-arm64" ;;
-  MINGW*|MSYS*|CYGWIN*) bin="$PLUGIN_BIN/dx-done-windows-x64.exe" ;;
+  Linux)                asset="dx-done-linux-x64" ;;
+  Darwin)               asset="dx-done-macos-arm64" ;;
+  MINGW*|MSYS*|CYGWIN*) asset="dx-done-windows-x64.exe" ;;
   *) echo "dx-done plugin: unsupported OS '$(uname -s)'" >&2; exit 1 ;;
 esac
 
-if [ ! -x "$bin" ]; then
-  echo "dx-done plugin: binary not found at $bin" >&2
-  echo "  run 'nx run cli:build-plugin' from the dx-do-mono repo to populate it" >&2
+bin="$PLUGIN_BIN/$asset"
+
+# Fast path: binary already present and executable — exec immediately, no network.
+if [ -x "$bin" ]; then
+  exec "$bin" "$@"
+fi
+
+# --- fetch-on-first-run ---
+
+MANIFEST="$PLUGIN_BIN/dx-done.release.json"
+if [ ! -f "$MANIFEST" ]; then
+  echo "dx-done plugin: manifest not found at $MANIFEST" >&2
+  echo "  The bundle appears to be incompletely installed — $MANIFEST is missing." >&2
   exit 1
 fi
+
+# Parse manifest fields without jq (absent on Git Bash/macOS by default).
+# Each value lives on its own line; grep + sed extracts by unique key string.
+repo=$(grep '"repo"' "$MANIFEST" | sed -E 's/.*"repo"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+# Anchor on "version" (not dxDoneVersion) — the key string differs so grep returns one line.
+version=$(grep '"version"' "$MANIFEST" | grep -v '"dxDoneVersion"' | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+# Each sha256 entry is on its own line keyed by the exact asset filename.
+want_sha=$(grep "\"$asset\"" "$MANIFEST" | sed -E 's/.*:[[:space:]]*"([0-9a-f]+)".*/\1/')
+
+if [ -z "$repo" ] || [ -z "$version" ] || [ -z "$want_sha" ]; then
+  echo "dx-done plugin: failed to parse manifest $MANIFEST for asset '$asset'" >&2
+  echo "  Check that repo, version, and sha256.$asset are present and non-empty." >&2
+  exit 1
+fi
+
+url="https://github.com/$repo/releases/download/v$version/$asset"
+tmp="$bin.tmp.$$"
+
+echo "dx-done plugin: fetching $asset v$version from $repo ..." >&2
+
+if command -v curl >/dev/null 2>&1; then
+  if ! curl -fSL "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "dx-done plugin: download failed for $asset v$version from $repo" >&2
+    echo "  URL: $url" >&2
+    exit 1
+  fi
+elif command -v wget >/dev/null 2>&1; then
+  if ! wget -O "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo "dx-done plugin: download failed for $asset v$version from $repo" >&2
+    echo "  URL: $url" >&2
+    exit 1
+  fi
+else
+  echo "dx-done plugin: need curl or wget to fetch the dx-done binary ($asset v$version from $repo)" >&2
+  exit 1
+fi
+
+# Compute SHA-256 portably: prefer sha256sum (Linux/Git Bash), fall back to shasum (macOS).
+if command -v sha256sum >/dev/null 2>&1; then
+  got_sha=$(sha256sum "$tmp" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  got_sha=$(shasum -a 256 "$tmp" | awk '{print $1}')
+else
+  rm -f "$tmp"
+  echo "dx-done plugin: need sha256sum or shasum to verify the download" >&2
+  exit 1
+fi
+
+if [ "$got_sha" != "$want_sha" ]; then
+  rm -f "$tmp"
+  echo "dx-done plugin: checksum mismatch for $asset (expected $want_sha, got $got_sha) — refusing to run" >&2
+  exit 1
+fi
+
+# Atomic install: chmod then mv is atomic on the same filesystem.
+chmod +x "$tmp" && mv -f "$tmp" "$bin"
 
 exec "$bin" "$@"

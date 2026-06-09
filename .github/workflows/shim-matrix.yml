@@ -1,13 +1,21 @@
 name: shim-matrix
 
-# Verifies the claude-dx-done launcher shim (bin/dx-done) resolves the correct
-# per-platform binary by `uname -s` and execs it, on real clean public runners.
+# Verifies the claude-dx-done launcher shim (bin/dx-done) on real clean public
+# runners, two ways:
 #
-# The shim is invoked the way Claude Code invokes it: the plugin's bin/ dir is
-# prepended to PATH and `dx-done` is called by name (PLUGIN_CONVENTIONS §3), so
-# the test exercises PATH resolution -> shebang -> uname dispatch -> exec of the
-# per-platform stub. The Linux + macOS jobs are the bash-path mechanics gate.
-# The Windows job runs two paths and is the whole point of this repo (see below).
+#  1. uname -> exec mechanics (jobs: linux / macos / windows) — the shim resolves
+#     the correct per-platform binary by `uname -s` and execs it. A per-runner Go
+#     stub stands in for the real binary (fast path: the binary is already present).
+#
+#  2. fetch-on-first-run (job: fetch) — with NO binary present and the bundle's
+#     tracked manifest (bin/dx-done.release.json) in place, the shim fetches the
+#     REAL dx-done binary from the public host DuaneNielsen/dx-done-dist, verifies
+#     it against the baked SHA-256, caches it, and execs it. Also asserts the
+#     checksum-mismatch path hard-fails and never execs. This is the #90 gate.
+#
+# NOTE: bin/dx-done and bin/dx-done.release.json here are VENDORED COPIES of the
+# claude-dx-done bundle's shim + manifest. Keeping them in sync with the bundle is
+# manual for now (drift-guard tracked in wild-west #189).
 
 on:
   push:
@@ -66,9 +74,7 @@ jobs:
         run: go build -o bin/dx-done-windows-x64.exe ./stub
 
       # --- Path A: Git Bash. This is the path Claude Code's Bash tool takes on
-      #     Windows (it runs commands through Git Bash). EXPECTED PASS, and this
-      #     step GATES the job — it is the "is the bash shim enough on Windows"
-      #     answer for the common path.
+      #     Windows. EXPECTED PASS, and this step GATES the job.
       - name: "Path A - Git Bash spawn (gates the job)"
         shell: bash
         run: |
@@ -85,22 +91,12 @@ jobs:
             echo "shim output => \`$out\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # --- Path B: native non-bash spawn. PowerShell calls the extension-less
-      #     shim file directly, the way a `cmd`/`pwsh` user (no bash in the loop)
-      #     would. EXPECTED FAIL: Windows' process spawner cannot run a
-      #     `#!/usr/bin/env bash` file natively. This is CHARACTERIZED, NOT
-      #     GATED — continue-on-error keeps the job green; a failure here is the
-      #     informative answer, not a test failure.
+      # --- Path B: native non-bash spawn. EXPECTED FAIL, characterized not gated.
       - name: "Path B - native non-bash spawn (characterized, not gated)"
         shell: pwsh
         continue-on-error: true
         run: |
           $ErrorActionPreference = 'Continue'
-          # The canonical non-bash spawn: cmd.exe (no bash in the loop) is asked
-          # to run the extension-less shim file by name, the way a cmd/pwsh-only
-          # tester would. Expected to FAIL -- Windows' process spawner cannot run
-          # a `#!/usr/bin/env bash` file natively (no shebang handling, and the
-          # file has no executable extension in PATHEXT).
           $out = ''
           try {
             $out = (cmd /c "bin\dx-done" 2>&1 | Out-String)
@@ -110,9 +106,77 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host "native (cmd /c) exit code: $code"
           Write-Host $out
-          # Plain lines only -- no markdown fences/backticks (backtick is pwsh's
-          # escape char and broke the summary write in the first run).
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Path B - native non-bash spawn: FAIL (expected, informative)"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "A non-bash caller (cmd/pwsh) cannot run the #!/usr/bin/env bash shim by name."
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "native (cmd /c) exit code: $code"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $out.Trim()
+
+  # ── fetch-on-first-run: the #90 gate. NO binary present; the shim fetches the
+  #    REAL dx-done binary from DuaneNielsen/dx-done-dist, verifies SHA-256, caches,
+  #    execs. Then proves the checksum-mismatch path hard-fails. Runs on all 3 OSes
+  #    through bash (Git Bash on Windows — Claude Code's real invocation path).
+  fetch:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Fetch-on-first-run -> verify -> cache -> exec (real binary)"
+        shell: bash
+        run: |
+          set -uo pipefail
+          case "$(uname -s)" in
+            Linux)                asset=dx-done-linux-x64 ;;
+            Darwin)               asset=dx-done-macos-arm64 ;;
+            MINGW*|MSYS*|CYGWIN*) asset=dx-done-windows-x64.exe ;;
+            *) echo "unsupported $(uname -s)"; exit 1 ;;
+          esac
+          echo "uname -s => $(uname -s); asset => $asset"
+          root="$PWD/fetch-clean"; mkdir -p "$root/bin"
+          cp bin/dx-done "$root/bin/dx-done"
+          cp bin/dx-done.release.json "$root/bin/dx-done.release.json"
+          chmod +x "$root/bin/dx-done"
+          test ! -e "$root/bin/$asset" || { echo "precondition FAIL: binary already present"; exit 1; }
+          set +e
+          out="$(CLAUDE_PLUGIN_ROOT="$root" "$root/bin/dx-done" help 2>&1)"; code=$?
+          set -e
+          echo "exit=$code"; printf '%s\n' "$out" | head -4
+          printf '%s\n' "$out" | grep -q "fetching $asset" || { echo "FAIL: fetch path not taken"; exit 1; }
+          # The shim caches ONLY after its own SHA-256 verify passes, immediately
+          # before exec — so a cached binary proves fetch+verify+install succeeded.
+          test -x "$root/bin/$asset" || { echo "FAIL: binary not cached (verify failed?)"; exit 1; }
+          echo "PASS: fetched + verified + cached + exec'd $asset (real dx-done; exit $code)"
+          {
+            echo "### ${{ matrix.os }} fetch-on-first-run: PASS"
+            echo "asset => $asset; real dx-done exec exit => $code (255 = help convention)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Checksum mismatch hard-fails (never execs / caches)"
+        shell: bash
+        run: |
+          set -uo pipefail
+          case "$(uname -s)" in
+            Linux)                asset=dx-done-linux-x64 ;;
+            Darwin)               asset=dx-done-macos-arm64 ;;
+            MINGW*|MSYS*|CYGWIN*) asset=dx-done-windows-x64.exe ;;
+          esac
+          root="$PWD/fetch-tamper"; mkdir -p "$root/bin"
+          cp bin/dx-done "$root/bin/dx-done"; chmod +x "$root/bin/dx-done"
+          zeros=0000000000000000000000000000000000000000000000000000000000000000
+          sed -E "s/(\"$asset\"[[:space:]]*:[[:space:]]*\")[0-9a-f]+/\\1$zeros/" \
+            bin/dx-done.release.json > "$root/bin/dx-done.release.json"
+          set +e
+          out="$(CLAUDE_PLUGIN_ROOT="$root" "$root/bin/dx-done" help 2>&1)"; code=$?
+          set -e
+          echo "exit=$code"; printf '%s\n' "$out" | head -4
+          [ "$code" -ne 0 ] || { echo "FAIL: expected nonzero exit"; exit 1; }
+          printf '%s\n' "$out" | grep -q "checksum mismatch" || { echo "FAIL: no checksum-mismatch message"; exit 1; }
+          test ! -e "$root/bin/$asset" || { echo "FAIL: binary cached despite mismatch"; exit 1; }
+          echo "PASS: checksum mismatch hard-failed; never cached or exec'd"
+          {
+            echo "### ${{ matrix.os }} checksum-mismatch hard-fail: PASS"
+            echo "exit => $code; no binary cached; dx-done never ran"
+          } >> "$GITHUB_STEP_SUMMARY"

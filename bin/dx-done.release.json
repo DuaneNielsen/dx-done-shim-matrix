@@ -1,0 +1,10 @@
+{
+  "repo": "DuaneNielsen/dx-done-dist",
+  "version": "0.1.0",
+  "dxDoneVersion": "6.0.1-beta.7",
+  "sha256": {
+    "dx-done-linux-x64": "5811db494cc261dcff18273b379378534ab57a7da3ff84d0aa688d01bf19d849",
+    "dx-done-macos-arm64": "d770fa42a47bdb2699c55c6df9e17e8d8e0bd4ad86aaf2601937b0ec05598d2d",
+    "dx-done-windows-x64.exe": "6136f767bae9a9113abd168b01a6d5ffc312fd1a45531c33ff4592d55fd33471"
+  }
+}
