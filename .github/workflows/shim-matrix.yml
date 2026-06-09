@@ -114,15 +114,16 @@ jobs:
   # ── fetch-on-first-run: the #90 gate. NO binary present; the shim fetches the
   #    REAL dx-done binary from DuaneNielsen/dx-done-dist, verifies SHA-256, caches,
   #    execs. Then proves the checksum-mismatch path hard-fails. Runs on Linux,
-  #    macOS arm64 (macos-latest) AND macOS Intel x86_64 (macos-13 — the dx-done-macos-x64
-  #    asset, wild-west #187), and Windows, through bash (Git Bash on Windows —
+  #    macOS arm64 (macos-latest) AND macOS Intel x86_64 (macos-15-intel — the
+  #    dx-done-macos-x64 asset, wild-west #187; macos-13 retired Dec 2025, macos-15-intel
+  #    is the last x86_64 image, available until ~Aug 2027), and Windows, through bash (Git Bash on Windows —
   #    Claude Code's real invocation path). The shim's Darwin branch dispatches on
   #    uname -m so each macOS runner fetches its matching arch asset.
   fetch:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13, windows-latest]   # macos-13 = Intel (x86_64)
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]   # macos-15-intel = Intel x86_64 (macos-13 retired Dec 2025)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
