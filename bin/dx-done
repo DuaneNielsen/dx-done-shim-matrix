@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_BIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/bin"
+
+case "$(uname -s)" in
+  Linux)                bin="$PLUGIN_BIN/dx-done-linux-x64" ;;
+  Darwin)               bin="$PLUGIN_BIN/dx-done-macos-arm64" ;;
+  MINGW*|MSYS*|CYGWIN*) bin="$PLUGIN_BIN/dx-done-windows-x64.exe" ;;
+  *) echo "dx-done plugin: unsupported OS '$(uname -s)'" >&2; exit 1 ;;
+esac
+
+if [ ! -x "$bin" ]; then
+  echo "dx-done plugin: binary not found at $bin" >&2
+  echo "  run 'nx run cli:build-plugin' from the dx-do-mono repo to populate it" >&2
+  exit 1
+fi
+
+exec "$bin" "$@"

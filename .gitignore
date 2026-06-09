@@ -1,0 +1,5 @@
+# The per-platform stubs are compiled on the runner (go build). Only the shim
+# itself (bin/dx-done) is tracked.
+/bin/dx-done-linux-x64
+/bin/dx-done-macos-arm64
+/bin/dx-done-windows-x64.exe
