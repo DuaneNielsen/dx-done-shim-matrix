@@ -96,16 +96,23 @@ jobs:
         continue-on-error: true
         run: |
           $ErrorActionPreference = 'Continue'
+          # The canonical non-bash spawn: cmd.exe (no bash in the loop) is asked
+          # to run the extension-less shim file by name, the way a cmd/pwsh-only
+          # tester would. Expected to FAIL -- Windows' process spawner cannot run
+          # a `#!/usr/bin/env bash` file natively (no shebang handling, and the
+          # file has no executable extension in PATHEXT).
           $out = ''
           try {
-            $out = (& .\bin\dx-done 2>&1 | Out-String)
+            $out = (cmd /c "bin\dx-done" 2>&1 | Out-String)
           } catch {
             $out = $_.Exception.Message
           }
           $code = $LASTEXITCODE
-          Write-Host "native spawn exit code: $code"
+          Write-Host "native (cmd /c) exit code: $code"
           Write-Host $out
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Path B - native non-bash spawn: exit=$code (expected: non-zero / cannot-run)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $out
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "```"
+          # Plain lines only -- no markdown fences/backticks (backtick is pwsh's
+          # escape char and broke the summary write in the first run).
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Path B - native non-bash spawn: FAIL (expected, informative)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "A non-bash caller (cmd/pwsh) cannot run the #!/usr/bin/env bash shim by name."
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "native (cmd /c) exit code: $code"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $out.Trim()
